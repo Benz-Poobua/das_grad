@@ -1,0 +1,103 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "das-grad"
+version = "0.1.0"
+description = "Interferometric frequency-domain gradiometry (I-FDG) for DAS virtual source gathers: local surface-wave phase-velocity estimation toward FWI starting models."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+
+authors = [
+  { name = "Benz Poobua" }
+]
+
+# -----------------------
+# Core runtime deps. The gradiometry pipeline itself is FFTs and elementwise
+# math (numpy/scipy; no torch, no zarr -- VSG construction lives in the
+# companion das_ani repository). Depth inversion of the I-FDG phase velocities
+# adds disba (forward surface-wave dispersion) and evodcinv (the inversion
+# driver), mirroring das_ani's inv.py; matplotlib backs src/plots.
+# -----------------------
+dependencies = [
+  "numpy>=1.24",
+  "scipy>=1.10",        # exact Hankel kernels in src.synth; filtering
+  "pyyaml>=6.0",
+  "tqdm>=4.66",
+  "pandas>=2.0",        # benchmark CSV in src.eval
+  "matplotlib>=3.7",    # src/plots (sloth / phase-velocity / dispersion figures)
+  "disba>=0.6",         # forward Rayleigh/Scholte dispersion + sensitivity kernels
+  "evodcinv>=2.2",      # surface-wave depth inversion (CPSO), as in das_ani/inv.py
+  "joblib>=1.3",        # parallel per-point 1-D inversions
+]
+
+# -----------------------
+# Optional dependencies
+# -----------------------
+[project.optional-dependencies]
+
+# Development / QA
+dev = [
+  "ruff>=0.5",
+  "black>=24.4",
+  "mypy>=1.10",
+  "pytest>=8.2",
+  "types-PyYAML>=6.0.12.20240917",
+]
+
+# Visualization
+viz = [
+  "matplotlib>=3.7",
+  "seaborn>=0.13",
+]
+
+# Post-processing pipelines (dask-parallel NCF batch jobs in src.ncf)
+postprocess = [
+  "dask>=2024.1",
+]
+
+# -----------------------
+# setuptools configuration
+# -----------------------
+# The code is imported as `src.grad`, `src.gradiometry`, ... (flat `src`
+# package), mirroring das_ani.
+[tool.setuptools]
+packages = ["src"]
+
+# -----------------------
+# Ruff (linting)
+# -----------------------
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = ["src"]
+exclude = ["build", "dist", ".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["E501"]
+
+# -----------------------
+# Black (formatting)
+# -----------------------
+[tool.black]
+line-length = 100
+target-version = ["py310"]
+
+# -----------------------
+# MyPy (typing)
+# -----------------------
+[tool.mypy]
+python_version = "3.10"
+warn_unused_configs = true
+no_implicit_optional = true
+check_untyped_defs = true
+
+# -----------------------
+# Pytest
+# -----------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

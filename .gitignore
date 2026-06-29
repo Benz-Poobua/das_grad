@@ -1,0 +1,81 @@
+# ==========================================
+# Python cache / build / packaging
+# ==========================================
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.build/
+build/
+dist/
+*.egg
+
+# ==========================================
+# Jupyter Notebook
+# ==========================================
+.ipynb_checkpoints/
+notebooks/data/
+
+# ==========================================
+# macOS system files
+# ==========================================
+.DS_Store
+
+# ==========================================
+# Data / Outputs (Folder-level scoping)
+# ==========================================
+data/
+results/
+logs/
+runlogs/
+
+# ==========================================
+# Global Data Filetypes (Binaries / Media)
+# ==========================================
+*.npy
+*.npz
+*.h5
+*.hdf5
+*.zarr/
+*.tar
+*.mp4
+
+# ==========================================
+# IDE / Testing / Secrets
+# ==========================================
+.vscode/
+.idea/
+.pytest_cache/
+.coverage
+htmlcov/
+.env
+
+# ==========================================
+# Virtual environments / local installs  
+# ==========================================
+.venv/
+venv/
+env/
+ENV/
+
+# If we accidentally created a venv inside the repo root (common on mac)
+bin/
+etc/
+include/
+lib/
+Lib/
+share/
+Scripts/
+pyvenv.cfg
+
+# If we created a venv inside your package folder
+das_grad/bin/
+das_grad/lib/
+das_grad/Lib/
+das_grad/Scripts/
+das_grad/pyvenv.cfg
+
+# More accidental venv folders inside package
+das_ani/share/
+das_ani/include/

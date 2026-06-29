@@ -1,0 +1,75 @@
+# =============================================================================
+# Configuration: Urban DAS I-FDG gradiometry
+# Input: VSGs produced by das_ani (configs/urban_cc.yaml) -- ideally the
+#        multi-day stacks (e.g. data/ncf_stacks/7d) for SNR.
+# =============================================================================
+#
+# Pipeline (Davis et al. 2026, Fig. 6):
+#   per VSG : torus mask -> channel taper -> temporal FFT (band)
+#             -> pseudospectral Laplacian -> sloth (eq. 9)
+#   stack   : weighted mean over virtual sources (eq. 10)
+#   post    : phase velocity -> quality mask -> median filter -> .npz
+
+paths:
+  # Where the das_ani VSGs live. Point at a stack window for best SNR.
+  vsg_root: ../das_ani/data/ncf_stacks/7d
+  vsg_pattern: "*_cc_*_v1.npy"
+  output_root: ./data/grad
+
+data:
+  # MUST match the das_ani run that produced the VSGs:
+  #   fs_proc = data.fs_raw / ingest.decimation    (250 / 1 for urban)
+  #   dx      = data.dx
+  #   first_chan = data.first_chan  (only used for absolute positions)
+  fs_proc: 250.0
+  dx: 8.16
+  first_chan: 399
+
+mask:
+  # Torus filter (Davis et al. 2026, Sec. 3.2): keep-lag window per channel
+  #   tau in [ r/v_outer + t_outer , r/v_inner + t_inner ]
+  # Choose v_inner <= slowest group velocity and v_outer >= fastest phase
+  # velocity of the fundamental mode -- read both off a das_ani dispersion
+  # panel (src/disp.py) before running.
+  v_inner: 150.0        # m/s  (urban Rayleigh, slow edge)
+  v_outer: 1200.0       # m/s  (fast edge)
+  t_inner: 1.0          # s    (pad after the slow edge)
+  t_outer: -1.0         # s    (pad before the fast edge)
+  taper_sec: 0.25       # raised-cosine ramp at the mute edges
+  causal_only: true
+
+band:
+  # Usable single-mode band, from the dispersion panel. The lower edge is
+  # also aperture-limited: f_min >~ 3 * c / aperture for a trustworthy
+  # spatial Laplacian.
+  f_min: 1.0
+  f_max: 10.0
+
+laplacian:
+  # fiber_1d: along-fiber pseudospectral d2/dl2 (+ optional cylindrical
+  #           curvature term (1/r) d/dl -- exact for in-line virtual
+  #           sources; recommended ON).
+  # grid_2d : Davis-faithful 2-D operator for gridded geometries
+  #           (requires laplacian.grid_ny / grid_dy).
+  mode: fiber_1d
+  include_curvature: true
+  channel_taper_alpha: 0.2   # Tukey taper of the channel axis (edge artifacts)
+
+stack:
+  # Near-source exclusion radius (m): per VSG, channels closer than this to
+  # its OWN virtual source are excluded from the eq.-10 stack (they remain
+  # covered by the other sources). The near-field bias this removes is the
+  # dominant error of the plain stack (~10x improvement on synthetics).
+  # Rule of thumb: 1-2 wavelengths at band center (c ~ 400 m/s, f ~ 5 Hz
+  # -> lambda ~ 80 m -> 150 m).
+  r_exclude_m: 150.0
+
+post:
+  median_size: 5        # channels; NaN-aware running median per frequency
+  edge_frac: 0.1        # fraction of channels masked at each array end
+  r_min_m: 0.0          # extra near-source product mask (0 = rely on stack)
+  v_min: 50.0           # plausibility bounds (m/s) -> NaN outside
+  v_max: 3000.0
+
+output:
+  tag: urban            # products land at <output_root>/grad_vsch_<tag>.npz
