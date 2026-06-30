@@ -33,15 +33,18 @@ non-physical values.
 from __future__ import annotations
 
 import logging
+import warnings
 from typing import Sequence
 
 import numpy as np
+
+from src.utils import get_vs_number, cosine_taper
+from src.laplacian import laplacian_fiber
 
 logger = logging.getLogger(__name__)
 
 #: Relative floor applied to |V|^2 denominators to avoid 0/0 at dead pixels.
 _EPS_REL = 1e-12
-
 
 def temporal_fft(
     data: np.ndarray,
@@ -331,3 +334,118 @@ def fk_peak_velocity(
             row = np.where(good, P[:, jf], 0.0)
             c_peak[i] = abs(f[jf] / k[int(np.argmax(row))])
     return freqs, c_peak
+
+
+# ==============================================================
+# 6. Stack sloth
+# ==============================================================
+def stack_sloth(files, *, f_min, f_max, k_cutoff=None, r_exclude_m=150.0,
+                aperture_m=350.0, channel_taper_alpha=0.3, include_curvature=True,
+                stack_method='median', quality_max=1.0):
+    """Per-VSG I-FDG sloth (eq. 9) -> position-aligned stack (eq. 10).
+    
+    Gathers are centred on their own VS and differ in size, so they are aligned
+    on the absolute-channel grid (VS index + row - zero-offset row). s1 and s2
+    gathers of the same VS land on the same positions, so passing both simply
+    doubles the samples that feed the robust stack.
+
+    NOTE: Memory-optimized implementation. Evaluates spatial overlaps densely to
+    avoid constructing a mostly-NaN (n_sources, n_grid, n_freq) matrix that would
+    cause Out-Of-Memory crashes on large 10,000+ channel DAS arrays.
+
+    aperture_m   : trim each gather to |offset| <= aperture_m before the
+                   Laplacian (both limbs kept), then channel-taper the kept
+                   window. ~350 m is the sweet spot here (coherence peaks, gaps 0):
+                   a full limb on both sides (all truncated) and the far offsets
+                   are low-SNR/scattered (high-k bias); <~250 m raises the
+                   aperture floor f_min ~ 3c/aperture into the band. None keeps
+                   the full window.
+    channel_taper_alpha : Tukey fraction applied across channels after the
+                   aperture clip so the channel-axis FFT in the pseudospectral
+                   Laplacian sees no step at the trimmed edge (it assumes
+                   periodicity). 0 disables.
+    stack_method : 'median' (robust -- rejects nodal/outlier pixels; default)
+                   or 'mean' (Davis eq. 10).
+    quality_max  : if set, mask pixels where |Im/Re| of the stacked sloth (the
+                   transport-equation residual) exceeds it -- a reliability flag.
+    Returns (positions_m, freqs, s2, coverage), coverage = #gathers/pixel.
+    """
+    per, starts, offsets = [], [], []
+    freqs, dx0 = None, None
+    
+    for f in files:
+        a = np.load(f)
+        d, lg, off = a['data'], a['lag'], a['offset']
+        
+        # Cache dx0 so we don't have to hit the disk again later
+        if dx0 is None and len(off) > 1:
+            dx0 = float(abs(off[1] - off[0]))
+            
+        if aperture_m is not None:                      
+            keep_ap = np.abs(off) <= aperture_m
+            d, off = d[keep_ap], off[keep_ap]
+            
+        if d.shape[0] < 5:                              
+            continue
+            
+        if channel_taper_alpha:                         
+            d = d * cosine_taper(d.shape[0], channel_taper_alpha)[:, None]
+            
+        fs = 1.0 / (lg[1] - lg[0])
+        dxi = float(abs(off[1] - off[0]))
+        
+        V, fr = temporal_fft(d, fs, f_min=f_min, f_max=f_max, axis=-1)
+        lapV = laplacian_fiber(V, dxi, offset=off,
+                               include_curvature=include_curvature, k_cutoff=k_cutoff)
+        
+        per.append(fdg_sloth(V, lapV, fr, freq_axis=-1))
+        starts.append(get_vs_number(f) - int(np.argmin(np.abs(off))))
+        offsets.append(off)
+        freqs = fr
+        
+    if not per:
+        raise ValueError("stack_sloth: No valid gathers found to stack.")
+        
+    gmin = min(starts)
+    gmax = max(s + p.shape[0] for s, p in zip(starts, per))
+    ng, nf = gmax - gmin, freqs.size
+    
+    # -------------------------------------------------------------------------
+    # MEMORY OPTIMIZATION: List of Lists
+    # Instead of allocating a 160 GB `(n_sources, ng, nf)` matrix filled with NaNs, 
+    # we construct a sparse map of only the overlapping traces per absolute grid point.
+    # -------------------------------------------------------------------------
+    grid_data = [[] for _ in range(ng)]
+    
+    for s2i, st, off in zip(per, starts, offsets):
+        for local_idx in range(s2i.shape[0]):
+            if np.abs(off[local_idx]) >= r_exclude_m:
+                abs_grid_idx = st + local_idx - gmin
+                grid_data[abs_grid_idx].append(s2i[local_idx, :])
+                
+    s2 = np.full((ng, nf), np.nan + 0j, dtype=np.complex128)
+    coverage = np.zeros(ng, dtype=int)
+    
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore', RuntimeWarning)
+        for i in range(ng):
+            if not grid_data[i]:
+                continue
+                
+            arr = np.array(grid_data[i]) # Shape: (n_overlapping_sources, nf)
+            coverage[i] = len(arr)
+            
+            if stack_method == 'median':
+                s2[i] = np.nanmedian(arr.real, axis=0) + 1j * np.nanmedian(arr.imag, axis=0)
+            else:
+                s2[i] = np.nanmean(arr, axis=0)
+                
+    if quality_max is not None:
+        q = np.abs(s2.imag) / (np.abs(s2.real) + 1e-30)
+        s2[q > quality_max] = np.nan
+        
+    if dx0 is None:
+        dx0 = 1.0 # Safe fallback
+        
+    positions = (gmin + np.arange(ng)) * dx0
+    return positions, freqs, s2, coverage

@@ -39,6 +39,7 @@ def parse_ncf_stack_filename(fname: str) -> Tuple[str, str, str, str]:
         raise ValueError(f"Stack filename not recognized: {fname}")
 
     date, vs, window, mode = m.groups()
+
     return date, vs, window, mode
 
 def get_vs_number(filepath: str) -> int:
@@ -54,6 +55,7 @@ def get_vs_number(filepath: str) -> int:
     else:
         raise ValueError(f"Could not parse VS number from filename: {filename}")
 
+
 # ==============================================================
 # 2. Math helpers
 # ==============================================================
@@ -61,8 +63,8 @@ def nextpow2(x: Union[int, float]) -> int:
     xf = float(x)
     if xf <= 1.0:
         return 1
+    
     return int(2 ** int(np.ceil(np.log2(xf))))
-
 
 def cosine_taper(n: int, alpha: float) -> np.ndarray:
     """
@@ -78,16 +80,21 @@ def cosine_taper(n: int, alpha: float) -> np.ndarray:
     """
     if n <= 0:
         return np.zeros(0)
+    
     alpha = float(np.clip(alpha, 0.0, 1.0))
     w = np.ones(n, dtype=np.float64)
+
     if alpha == 0.0 or n == 1:
         return w
     edge = int(np.floor(alpha * (n - 1) / 2.0))
+    
     if edge < 1:
         return w
+    
     ramp = 0.5 * (1.0 + np.cos(np.pi * (np.arange(edge + 1) / edge - 1.0)))
     w[: edge + 1] = ramp
     w[n - edge - 1:] = ramp[::-1]
+
     return w
 
 
@@ -160,7 +167,6 @@ def fk_transform(
     f_axis = fftshift(np.fft.fftfreq(nt_out, dt))
 
     return f_axis, k_axis, fk_spectrum
-
 
 def fk_inverse(
     fk_spectrum: np.ndarray,
