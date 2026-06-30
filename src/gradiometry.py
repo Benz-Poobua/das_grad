@@ -279,3 +279,55 @@ def sloth_to_velocity(
     if v_max is not None:
         v[v > float(v_max)] = np.nan
     return v
+
+
+# ==============================================================
+# 5. FK-peak dispersion (calibration / mode-centering reference)
+# ==============================================================
+def fk_peak_velocity(
+    data: np.ndarray,
+    dt: float,
+    dx: float,
+    *,
+    f_min: float,
+    f_max: float,
+    v_min: float = 120.0,
+    v_max: float = 900.0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Apparent phase velocity of the dominant (fundamental) energy per frequency,
+    read off the 2-D FK spectrum: at each frequency take the wavenumber of peak
+    power within the physical fan [v_min, v_max] and return v = f / |k|.
+
+    This is an INDEPENDENT, ridge-following dispersion estimate (not gradiometry).
+    Two uses: (1) a target to calibrate the Laplacian ``k_cutoff`` against, and
+    (2) a centre velocity for a narrowband fundamental-mode FK extract. Because
+    the FK peak tracks the strongest ridge, it is robust to the high-k tail that
+    biases the pointwise k^2-weighted sloth low.
+
+    :param data: (nch, nlag) real VSG (channels x lag).
+    :param dt: Lag sampling (s).
+    :param dx: Channel spacing (m).
+    :param f_min: Lower frequency bound (Hz).
+    :param f_max: Upper frequency bound (Hz).
+    :param v_min: Slow edge of the search fan (m/s).
+    :param v_max: Fast edge of the search fan (m/s).
+    :return: (freqs, c_peak) -- 1-D arrays over the in-band positive
+             frequencies; ``c_peak`` is NaN where no in-fan energy exists.
+    """
+    data = np.asarray(data, dtype=np.float64)
+    nx, nt = data.shape
+    P = np.abs(np.fft.fftshift(np.fft.fft2(data))) ** 2
+    k = np.fft.fftshift(np.fft.fftfreq(nx, d=float(dx)))   # cycles/m
+    f = np.fft.fftshift(np.fft.fftfreq(nt, d=float(dt)))   # Hz
+    in_band = np.where((f >= float(f_min)) & (f <= float(f_max)) & (f > 0.0))[0]
+    freqs = f[in_band]
+    c_peak = np.full(freqs.size, np.nan, dtype=np.float64)
+    for i, jf in enumerate(in_band):
+        with np.errstate(divide="ignore"):
+            v = np.where(k != 0.0, f[jf] / k, np.inf)
+        good = (np.abs(v) >= v_min) & (np.abs(v) <= v_max)
+        if good.any():
+            row = np.where(good, P[:, jf], 0.0)
+            c_peak[i] = abs(f[jf] / k[int(np.argmax(row))])
+    return freqs, c_peak

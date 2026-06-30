@@ -9,320 +9,308 @@
           phase-velocity frequency-distance panels (Davis et al. 2026, Figs
           7-9), and dispersion cross-checks against das_ani picks.
 
-Style mirrors das_ani/src/plots.py and src/inv.py (numpydoc docstrings,
+Style mirrors das_ani/src/plots.py and src/inv.py (Sphinx reST docstrings,
 pcolormesh with 'gouraud' shading, turbo/seismic colormaps, 300 dpi saves).
 The module is import-light: numpy + matplotlib only.
 """
 from __future__ import annotations
 
-import os
 import logging
+import os
 from pathlib import Path
-from tqdm import tqdm
-from typing import Optional, Sequence, Tuple, Union, List, Literal 
+from typing import List, Literal, Optional, Sequence, Tuple, Union
 
-import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.animation import FuncAnimation
+import numpy as np
 from matplotlib import rcParams
+from matplotlib.animation import FuncAnimation
+from tqdm import tqdm
 
-from src.utils import parse_ncf_stack_filename, fk_transform
-
+from src.utils import fk_transform, parse_ncf_stack_filename
 
 logger = logging.getLogger(__name__)
 PathLike = Union[str, Path]
 
-_RC = {
+# ===========================================================================
+# Unified Plotting Configuration
+# ===========================================================================
+_PLOT_CONFIG = {
     "figure.dpi": 110,
     "savefig.dpi": 300,
-    "axes.titlesize": 14,
+    "axes.titlesize": 16,
     "axes.labelsize": 13,
-    "font.size": 11,
+    "font.size": 12,
+    "legend.fontsize": 11,
+    "xtick.labelsize": 11,
+    "ytick.labelsize": 11,
+    "figure.figsize": [10, 5],
+    "font.family": "sans-serif",
+    "font.sans-serif": ["Arial", "Helvetica", "DejaVu Sans"],
 }
-
-# ===========================================================================
-# Plotting Configuration
-# ===========================================================================
-params = {
-    'savefig.dpi': 300,
-    'axes.labelsize': 14,
-    'axes.titlesize': 18,
-    'font.size': 14,
-    'legend.fontsize': 12,
-    'xtick.labelsize': 12,
-    'ytick.labelsize': 12,
-    'text.usetex': False,
-    'figure.figsize': [12, 6],
-    'font.family': 'sans-serif',
-    'font.sans-serif': ['Arial', 'Helvetica', 'DejaVu Sans']
-}
-rcParams.update(params)
+rcParams.update(_PLOT_CONFIG)
 
 
 def _save(fig: plt.Figure, save_path: Optional[PathLike]) -> None:
+    """
+    Save a figure to disk with standard bounding and facecolor settings.
+    
+    :param fig: The Matplotlib figure to save.
+    :type fig: plt.Figure
+    :param save_path: The destination path for the saved figure.
+    :type save_path: Optional[PathLike]
+    """
     if save_path:
         p = Path(save_path).expanduser()
         p.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(p, bbox_inches="tight", facecolor="white")
         logger.info("Saved figure -> %s", p)
-        print(f"Figure saved to: {p}")
 
 
 # ==============================================================
 # 1. Virtual source gather (QC)
 # ==============================================================
 def plot_vsg(
-    files: List[str],
+    files: Sequence[PathLike],
     VS: Union[str, int],
     *,
     unit: str = "m",
-    clip: float | None = 0.05,
-    pclip: float | None = None,
+    clip: Optional[float] = 0.05,
+    pclip: Optional[float] = None,
     cmap: str = "seismic",
     range_m: float = 4000.0,
     clip_lim: bool = True,
     view_side: Literal["both", "left", "right"] = "both",
     pos_offset: float = 0.0,
-    figsize: Tuple[float, float] | None = None,
-    title: str | None = None,
+    figsize: Optional[Tuple[float, float]] = None,
+    title: Optional[str] = None,
     show_cbar: bool = True,
-    dpi: int = 120,
 ) -> Tuple[plt.Figure, plt.Axes]:
     """
-    Plots a static, spatially and temporally pre-processed Noise Cross-Correlation 
-    Function (NCF) gather for a single Virtual Source (VS).
-
-    This function automatically aligns with the zero-offset trace, handling cases where 
-    node geometries vary across files.
+    Plot a static Noise Cross-Correlation Function (NCF) gather for a single Virtual Source.
 
     :param files: List of file paths to the pre-processed NCF numpy archives (.npz).
-    :param VS: Virtual Source number to plot (e.g., 5 or "005"). The function scans the list for it.
-    :param unit: Spatial distance unit for the x-axis ("m" or "km"). Default is "m".
-    :param clip: Absolute amplitude limit for colorbar scaling. Used only if `pclip` is None.
-    :param pclip: Percentile for dynamic amplitude clipping (e.g., 99.0).
-    :param cmap: Matplotlib colormap to use. Default is "seismic".
-    :param range_m: Maximum spatial distance (in meters or km based on `unit`) to display.
-    :param clip_lim: If True, strictly limits the x-axis bounds based on `range_m`, `view_side`, 
-                     and `pos_offset`.
-    :param view_side: Determines which side of the virtual source gather to display 
-                      ("both", "left", or "right"). Default is "both".
-    :param pos_offset: Spatial exclusion offset from the virtual source to clip out near-source noise.
-    :param figsize: Optional tuple defining figure dimensions (width, height) in inches.
-    :param title: Custom title for the plot. If None, auto-generates one.
-    :param show_cbar: Toggle visibility of the correlation amplitude colorbar.
-    :param dpi: Resolution of the output plot.
-    :returns: A tuple containing the (Figure, Axes) objects.
+    :type files: Sequence[PathLike]
+    :param VS: Virtual Source number to plot (e.g., 5 or "005").
+    :type VS: Union[str, int]
+    :param unit: Spatial distance unit for the x-axis ("m" or "km"), by default "m".
+    :type unit: str
+    :param clip: Absolute amplitude limit for colorbar scaling, by default 0.05.
+    :type clip: Optional[float]
+    :param pclip: Percentile for dynamic amplitude clipping (e.g., 99.0), overrides `clip`.
+    :type pclip: Optional[float]
+    :param cmap: Matplotlib colormap to use, by default "seismic".
+    :type cmap: str
+    :param range_m: Maximum spatial distance in meters to display, by default 4000.0.
+    :type range_m: float
+    :param clip_lim: If True, strictly limits x-axis bounds based on `range_m`, by default True.
+    :type clip_lim: bool
+    :param view_side: Determines which side of the gather to display, by default "both".
+    :type view_side: Literal["both", "left", "right"]
+    :param pos_offset: Spatial exclusion offset from the source to clip near-field noise, by default 0.0.
+    :type pos_offset: float
+    :param figsize: Custom figure dimensions (width, height) in inches.
+    :type figsize: Optional[Tuple[float, float]]
+    :param title: Custom plot title. If None, auto-generates from metadata.
+    :type title: Optional[str]
+    :param show_cbar: Toggle visibility of the colorbar, by default True.
+    :type show_cbar: bool
+    :returns: The constructed Matplotlib Figure and Axes objects.
+    :rtype: Tuple[plt.Figure, plt.Axes]
     """
     if not files:
         raise ValueError("Provided file list is empty!")
 
-    view_side, unit = view_side.lower().strip(), unit.lower().strip()
-    dist_scale = 1000.0 if unit == "km" else 1.0
-    plot_range, plot_offset = range_m / dist_scale, pos_offset / dist_scale
+    view_side_clean = view_side.lower().strip()
+    unit_clean = unit.lower().strip()
+    dist_scale = 1000.0 if unit_clean == "km" else 1.0
+    plot_range = range_m / dist_scale
+    plot_offset = pos_offset / dist_scale
 
-    # Find the specific VS file from the list
     target_path = None
     target_date, target_window, target_vs_str, target_xmode = "", "", "", ""
 
     for p in files:
-        date, vs_str, window, xmode = parse_ncf_stack_filename(p)
+        date, vs_str, window, xmode = parse_ncf_stack_filename(str(p))
         if int(vs_str) == int(VS):
             target_path = p
-            target_date = date
-            target_window = window
-            target_vs_str = vs_str
-            target_xmode = xmode
+            target_date, target_window, target_vs_str, target_xmode = date, window, vs_str, xmode
             break
 
     if target_path is None:
         raise FileNotFoundError(f"Could not find a file matching VS={VS} in the provided file list.")
 
-    # Load Data from .npz
     archive = np.load(target_path)
-    current_offset = archive['offset'] / dist_scale
-    lag_axis = archive['lag']
-    data = archive['data'].T
+    current_offset = archive["offset"] / dist_scale
+    lag_axis = archive["lag"]
+    data = archive["data"].T
 
-    # Compute clipping limits
     if pclip is not None:
         c0 = float(np.percentile(np.abs(data), pclip))
     else:
         c0 = float(clip if clip is not None else 1.0)
 
-    # Establish plotting limits based on view_side and pos_offset
-    if view_side == "both": 
+    if view_side_clean == "both":
         left_bound, right_bound = -plot_range, plot_range
-    elif view_side == "right": 
+    elif view_side_clean == "right":
         left_bound, right_bound = plot_offset, plot_range
-    else: 
+    else:
         left_bound, right_bound = -plot_range, -plot_offset
 
-    # Setup Plot
     if figsize is None:
         figsize = (8, 6) if clip_lim else (10, 6)
 
-    fig, ax = plt.subplots(figsize=figsize, layout="constrained", dpi=dpi)
+    fig, ax = plt.subplots(figsize=figsize, layout="constrained")
     ax.invert_yaxis()
-    
-    ax.set_xlabel(f"Offset from Virtual Source ({unit})")
+    ax.set_xlabel(f"Offset from Virtual Source ({unit_clean})")
     ax.set_ylabel("Lag time (s)")
 
-    if clip_lim: 
+    if clip_lim:
         ax.set_xlim(left_bound, right_bound)
 
-    mesh = ax.pcolormesh(
-        current_offset, lag_axis, data, 
-        shading="gouraud", cmap=cmap, vmin=-c0, vmax=c0
-    )
-    
+    mesh = ax.pcolormesh(current_offset, lag_axis, data, shading="gouraud", cmap=cmap, vmin=-c0, vmax=c0)
     ax.axvline(x=0.0, color="black", linestyle="--", linewidth=1.2, alpha=0.6)
 
     if show_cbar:
         fig.colorbar(mesh, ax=ax, fraction=0.046, pad=0.04).set_label("Correlation amplitude")
 
-    # Title generation
     if title is None:
         title = f"NCF Gather (VS={target_vs_str} | {target_date} | {target_xmode})"
-    
     ax.set_title(title)
-    
+
     return fig, ax
 
+# ==============================================================
+# 2. FK 
+# ==============================================================
+
 def animate_vsg(
-    files: List[str],
+    files: Sequence[PathLike],
     *,
     unit: str = "m",
-    clip: float | None = 0.05,
-    pclip: float | None = None,
+    clip: Optional[float] = 0.05,
+    pclip: Optional[float] = None,
     cmap: str = "seismic",
     range_m: float = 4000.0,
     clip_lim: bool = True,
     view_side: Literal["both", "left", "right"] = "both",
     pos_offset: float = 0.0,
     interval_ms: int = 200,
-    save_vs: List[int] | None = None,
-    save_dir: str = "./saved_figures",
+    save_vs: Optional[Sequence[int]] = None,
+    save_dir: PathLike = "./saved_figures",
     save_fmt: str = "png",
     save_dpi: int = 300,
 ) -> FuncAnimation:
     """
-    Animates spatially and temporally pre-processed Noise Cross-Correlation Function (NCF) 
-    gathers using Matplotlib's pcolormesh.
-
-    This function seamlessly handles variable receiver geometries (e.g., urban datasets where 
-    nodes drop offline) by dynamically redrawing the spatial grid for each frame. It features 
-    dynamic percentile clipping, directional viewing, near-field offset masking, and selective 
-    frame saving. Accepts an explicit list of pre-sorted .npz files for easy slicing.
+    Animate spatially and temporally pre-processed NCF gathers.
 
     :param files: List of file paths to the pre-processed NCF numpy archives.
-    :param unit: Spatial distance unit for the x-axis ("m" or "km"). Default is "m".
-    :param clip: Absolute amplitude limit for colorbar scaling. Used only if `pclip` is None.
-    :param pclip: Percentile for dynamic amplitude clipping (e.g., 99.0). Computes a global 
-                  median percentile across early frames for stable animation scaling.
-    :param cmap: Matplotlib colormap to use. Default is "seismic".
-    :param range_m: Maximum spatial distance (in meters or km based on `unit`) to display.
-    :param clip_lim: If True, strictly limits the x-axis bounds based on `range_m`, `view_side`, 
-                     and `pos_offset`.
-    :param view_side: Determines which side of the virtual source gather to display 
-                      ("both", "left", or "right"). Default is "both".
-    :param pos_offset: Spatial exclusion offset from the virtual source to clip out near-source noise.
-    :param interval_ms: Delay between animation frames in milliseconds. Default is 200.
-    :param save_vs: Optional list of Virtual Source (VS) numbers to save as static high-res images.
-    :param save_dir: Directory where the static frames will be saved. Default is "./saved_figures".
-    :param save_fmt: Image format for the saved frames (e.g., "png"). Default is "png".
-    :param save_dpi: Resolution for the saved frames. Default is 300.
-    :returns: The constructed Matplotlib FuncAnimation object ready for rendering or display.
+    :type files: Sequence[PathLike]
+    :param unit: Spatial distance unit ("m" or "km"), by default "m".
+    :type unit: str
+    :param clip: Absolute amplitude limit for scaling, by default 0.05.
+    :type clip: Optional[float]
+    :param pclip: Percentile for dynamic amplitude clipping across early frames.
+    :type pclip: Optional[float]
+    :param cmap: Matplotlib colormap, by default "seismic".
+    :type cmap: str
+    :param range_m: Maximum spatial distance in meters to display, by default 4000.0.
+    :type range_m: float
+    :param clip_lim: Strictly limit x-axis bounds, by default True.
+    :type clip_lim: bool
+    :param view_side: Side of the gather to display, by default "both".
+    :type view_side: Literal["both", "left", "right"]
+    :param pos_offset: Near-source exclusion offset, by default 0.0.
+    :type pos_offset: float
+    :param interval_ms: Delay between frames in milliseconds, by default 200.
+    :type interval_ms: int
+    :param save_vs: Specific Virtual Source IDs to export as static images.
+    :type save_vs: Optional[Sequence[int]]
+    :param save_dir: Output directory for saved static frames, by default "./saved_figures".
+    :type save_dir: PathLike
+    :param save_fmt: Image format for static exports, by default "png".
+    :type save_fmt: str
+    :param save_dpi: Resolution for exported frames, by default 300.
+    :type save_dpi: int
+    :returns: The Matplotlib animation object.
+    :rtype: FuncAnimation
     """
     if not files:
         raise ValueError("Provided file list is empty!")
 
-    view_side, unit = view_side.lower().strip(), unit.lower().strip()
-    dist_scale = 1000.0 if unit == "km" else 1.0
-    plot_range, plot_offset = range_m / dist_scale, pos_offset / dist_scale
+    view_side_clean = view_side.lower().strip()
+    unit_clean = unit.lower().strip()
+    dist_scale = 1000.0 if unit_clean == "km" else 1.0
+    plot_range = range_m / dist_scale
+    plot_offset = pos_offset / dist_scale
 
     parsed = []
     for p in files:
-        date, vs, window, xmode = parse_ncf_stack_filename(p)
+        date, vs, window, xmode = parse_ncf_stack_filename(str(p))
         parsed.append((p, date, vs, xmode))
 
     if pclip is not None:
-        c0 = float(np.median([np.percentile(np.abs(np.load(p[0])['data']), pclip) 
-                              for p in tqdm(parsed[:50], desc="Scanning global pclip")])) 
+        sub_scan = [np.percentile(np.abs(np.load(p[0])["data"]), pclip) for p in parsed[:50]]
+        c0 = float(np.median(sub_scan))
     else:
         c0 = float(clip if clip is not None else 1.0)
 
-    if view_side == "both": left_bound, right_bound = -plot_range, plot_range
-    elif view_side == "right": left_bound, right_bound = plot_offset, plot_range
-    else: left_bound, right_bound = -plot_range, -plot_offset
+    if view_side_clean == "both":
+        left_bound, right_bound = -plot_range, plot_range
+    elif view_side_clean == "right":
+        left_bound, right_bound = plot_offset, plot_range
+    else:
+        left_bound, right_bound = -plot_range, -plot_offset
 
-    # Figure Layout using Constrained Layout
     fig, ax = plt.subplots(figsize=(8, 6) if clip_lim else (10, 6), layout="constrained")
     ax.invert_yaxis()
-    ax.set_xlabel(f"Offset from Virtual Source ({unit})")
+    ax.set_xlabel(f"Offset from Virtual Source ({unit_clean})")
     ax.set_ylabel("Lag time (s)")
-    if clip_lim: 
+    if clip_lim:
         ax.set_xlim(left_bound, right_bound)
 
-    # Load Initial Frame
     archive0 = np.load(parsed[0][0])
-    current_offset0 = archive0['offset'] / dist_scale
-    lag_axis0 = archive0['lag']
-    data0 = archive0['data'].T
-    
-    mesh = ax.pcolormesh(current_offset0, lag_axis0, data0, shading="gouraud", cmap=cmap, vmin=-c0, vmax=c0)
+    mesh = ax.pcolormesh(
+        archive0["offset"] / dist_scale, archive0["lag"], archive0["data"].T,
+        shading="gouraud", cmap=cmap, vmin=-c0, vmax=c0
+    )
     vline = ax.axvline(x=0.0, color="black", linestyle="--", linewidth=1.2, alpha=0.6)
     fig.colorbar(mesh, ax=ax, fraction=0.046, pad=0.04).set_label("Correlation amplitude")
-    
-    date0, vs0, xmode0 = parsed[0][1], parsed[0][2], parsed[0][3]
-    title_text = ax.set_title(f"NCF Gather (VS={vs0} | {date0} | {xmode0})")
 
-    # Animation tracking variables
-    pbar_container = []
+    title_text = ax.set_title(f"NCF Gather (VS={parsed[0][2]} | {parsed[0][1]} | {parsed[0][3]})")
+
     processed_frames = set()
     saved_frames = set()
     total_frames = len(parsed)
+    pbar = tqdm(total=total_frames, desc="Rendering Video")
 
-    def update(frame_idx):
-        nonlocal mesh  # Declare nonlocal so we can overwrite the mesh
-        
-        if not pbar_container:
-            pbar_container.append(tqdm(total=total_frames, desc="Rendering Video"))
-
+    def update(frame_idx: int):
+        nonlocal mesh
         path, date, vs, xmode = parsed[frame_idx]
         archive = np.load(path)
-        dA = archive['data'].T
-        
-        # Load the dynamic offset axis for this specific frame
-        current_offset = archive['offset'] / dist_scale
-        lag_axis = archive['lag']
-        
 
         mesh.remove()
-        mesh = ax.pcolormesh(current_offset, lag_axis, dA, shading="gouraud", cmap=cmap, vmin=-c0, vmax=c0)
-        # ------------------------------------------
-        
+        mesh = ax.pcolormesh(
+            archive["offset"] / dist_scale, archive["lag"], archive["data"].T,
+            shading="gouraud", cmap=cmap, vmin=-c0, vmax=c0
+        )
         title_text.set_text(f"NCF Gather (VS={vs} | {date} | {xmode})")
-        
-        # --- LOGIC: Save Specific Frames ---
-        if save_vs is not None and int(vs) in save_vs:
-            if frame_idx not in saved_frames:
-                os.makedirs(save_dir, exist_ok=True)
-                save_path = os.path.join(save_dir, f"NCF_Gather_VS_{vs}.{save_fmt}")
-                fig.savefig(save_path, dpi=save_dpi, bbox_inches="tight", facecolor="white")
-                saved_frames.add(frame_idx)
-        # -----------------------------------
-        
+
+        if save_vs is not None and int(vs) in save_vs and frame_idx not in saved_frames:
+            out_dir = Path(save_dir)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            export_path = out_dir / f"NCF_Gather_VS_{vs}.{save_fmt}"
+            fig.savefig(export_path, dpi=save_dpi, bbox_inches="tight", facecolor="white")
+            saved_frames.add(frame_idx)
+
         if frame_idx not in processed_frames:
-            pbar_container[0].update(1)
+            pbar.update(1)
             processed_frames.add(frame_idx)
-        if len(processed_frames) == total_frames:
-            pbar_container[0].close()
+            if len(processed_frames) == total_frames:
+                pbar.close()
 
         return mesh, vline, title_text
 
-    ani = FuncAnimation(fig, update, frames=total_frames, interval=interval_ms, blit=False)
-    plt.close(fig)
-    return ani
+    return FuncAnimation(fig, update, frames=total_frames, interval=interval_ms, blit=False)
 
 def plot_fk(
     files: List[str],
@@ -351,21 +339,37 @@ def plot_fk(
     overlays for dispersion analysis.
 
     :param files: List of file paths to the pre-processed NCF numpy archives (.npz).
+    :type files: List[str]
     :param VS: Virtual Source number to plot (e.g., 5 or "005").
+    :type VS: Union[str, int]
     :param unit: Spatial distance unit used for the x-axis ("m" or "km"). Default is "m".
+    :type unit: str
     :param clip: Absolute amplitude limit for power normalization. Used only if `pclip` is None.
+    :type clip: Optional[float]
     :param pclip: Percentile for dynamic amplitude clipping (e.g., 99.0).
+    :type pclip: Optional[float]
     :param cmap: Matplotlib colormap to use. Default is "inferno".
+    :type cmap: str
     :param view_side: Determines which side of the spatial array to process and display ("both", "left", or "right"). 
+    :type view_side: Literal["both", "left", "right"]
     :param pos_offset: Spatial exclusion offset to clip out near-source auto-correlation artifacts.
+    :type pos_offset: float
     :param klim: Optional tuple (kmin, kmax) specifying the wavenumber (x-axis) limits. 
+    :type klim: Optional[Tuple[float, float]]
     :param figsize: Tuple specifying the figure dimensions.
+    :type figsize: Tuple[float, float]
     :param vmin: Optional minimum phase velocity (m/s). Plots a cyan dashed reference line.
+    :type vmin: Optional[float]
     :param vmax: Optional maximum phase velocity (m/s). Plots a lime dashed reference line.
+    :type vmax: Optional[float]
     :param title: Custom title for the plot. If None, auto-generates one.
+    :type title: Optional[str]
     :param show_cbar: Toggle visibility of the power amplitude colorbar.
+    :type show_cbar: bool
     :param dpi: Resolution of the output plot.
+    :type dpi: int
     :returns: A tuple containing the (Figure, Axes) objects.
+    :rtype: Tuple[plt.Figure, plt.Axes]
     """
     if not files:
         raise ValueError("Provided file list is empty!")
@@ -495,26 +499,39 @@ def animate_fk(
     .npz files to allow for easy slicing and includes hooks for exporting static frames.
 
     :param files: List of file paths to the pre-processed NCF numpy archives.
+    :type files: List[str]
     :param unit: Spatial distance unit used for the x-axis ("m" or "km"). Default is "m".
+    :type unit: str
     :param clip: Absolute amplitude limit for power normalization. Used only if `pclip` is None.
-    :param pclip: Percentile for dynamic amplitude clipping (e.g., 99.0). Computes a global 
-                  median percentile across early frames for stable animation scaling.
+    :type clip: Optional[float]
+    :param pclip: Percentile for dynamic amplitude clipping (e.g., 99.0). Computes a global median percentile across early frames for stable animation scaling.
+    :type pclip: Optional[float]
     :param cmap: Matplotlib colormap to use. Default is "inferno" (standard for power spectra).
-    :param view_side: Determines which side of the spatial array to process and which wavenumbers 
-                      to display ("both", "left", or "right"). 
-    :param pos_offset: Spatial exclusion offset from the virtual source. Data within this distance 
-                       is excluded before the f-k transform to prevent near-source spatial aliasing.
-    :param klim: Optional tuple (kmin, kmax) specifying the wavenumber (x-axis) limits. 
-                 Automatically flips sign if `view_side` is "left".
+    :type cmap: str
+    :param view_side: Determines which side of the spatial array to process and which wavenumbers to display ("both", "left", or "right"). 
+    :type view_side: Literal["both", "left", "right"]
+    :param pos_offset: Spatial exclusion offset from the virtual source. Data within this distance is excluded before the f-k transform to prevent near-source spatial aliasing.
+    :type pos_offset: float
+    :param klim: Optional tuple (kmin, kmax) specifying the wavenumber (x-axis) limits. Automatically flips sign if `view_side` is "left".
+    :type klim: Optional[Tuple[float, float]]
     :param figsize: Tuple specifying the figure dimensions. Default is (8, 6).
+    :type figsize: Tuple[float, float]
     :param vmin: Optional minimum phase velocity (m/s). Plots a cyan dashed reference line.
+    :type vmin: Optional[float]
     :param vmax: Optional maximum phase velocity (m/s). Plots a lime dashed reference line.
+    :type vmax: Optional[float]
     :param interval_ms: Delay between animation frames in milliseconds. Default is 200.
+    :type interval_ms: int
     :param save_vs: Optional list of Virtual Source (VS) numbers to save as static high-res images.
+    :type save_vs: Optional[List[int]]
     :param save_dir: Directory where the static frames will be saved. Default is "./saved_figures".
+    :type save_dir: str
     :param save_fmt: Image format for the saved frames (e.g., "png"). Default is "png".
+    :type save_fmt: str
     :param save_dpi: Resolution for the saved frames. Default is 300.
+    :type save_dpi: int
     :returns: The constructed Matplotlib FuncAnimation object ready for rendering or display.
+    :rtype: FuncAnimation
     """
     if not files:
         raise ValueError("Provided file list is empty!")
@@ -630,7 +647,7 @@ def animate_fk(
     return ani
 
 # ==============================================================
-# 2. Frequency-distance panels (sloth / phase velocity)
+# 3. Frequency-distance panels (sloth / phase velocity)
 # ==============================================================
 def _freq_distance_panel(
     positions: np.ndarray,
@@ -645,25 +662,57 @@ def _freq_distance_panel(
     invert_freq: bool,
     figsize: Tuple[float, float],
     save_path: Optional[PathLike],
-) -> None:
-    """Shared renderer for (distance x frequency) maps. ``field`` is (nx, nf)."""
-    with plt.rc_context(_RC):
-        fig, ax = plt.subplots(figsize=figsize)
-        masked = np.ma.masked_invalid(field.T)            # (nf, nx)
-        cmap_obj = plt.get_cmap(cmap).copy()
-        cmap_obj.set_bad("0.85")                           # grey = no estimate
-        mesh = ax.pcolormesh(positions, freqs, masked, cmap=cmap_obj,
-                             vmin=vmin, vmax=vmax, shading="gouraud")
-        # low frequency = deeper: put it at the bottom of the axis
-        if invert_freq:
-            ax.set_ylim(freqs.max(), freqs.min())
-        ax.set_xlabel("Distance along cable (m)")
-        ax.set_ylabel("Frequency (Hz)")
-        ax.set_title(title)
-        cbar = fig.colorbar(mesh, ax=ax, pad=0.02)
-        cbar.set_label(cbar_label)
-        _save(fig, save_path)
-        plt.show()
+    xlabel: str = "Distance along cable (m)",
+) -> Tuple[plt.Figure, plt.Axes]:
+    """
+    Shared underlying renderer for 2D (distance x frequency) field maps.
+
+    :param positions: 1D array of along-fiber positions in meters.
+    :type positions: np.ndarray
+    :param freqs: 1D array of frequencies in Hz.
+    :type freqs: np.ndarray
+    :param field: 2D array (positions, freqs) of the field to plot.
+    :type field: np.ndarray
+    :param cmap: Colormap name.
+    :type cmap: str
+    :param vmin: Minimum amplitude for the colormap.
+    :type vmin: Optional[float]
+    :param vmax: Maximum amplitude for the colormap.
+    :type vmax: Optional[float]
+    :param cbar_label: Label for the colorbar.
+    :type cbar_label: str
+    :param title: Plot title.
+    :type title: str
+    :param invert_freq: Whether to place low frequencies at the bottom axis.
+    :type invert_freq: bool
+    :param figsize: Tuple defining the figure dimensions (width, height) in inches.
+    :type figsize: Tuple[float, float]
+    :param save_path: Destination path to save the figure, or None to skip saving.
+    :type save_path: Optional[PathLike]
+    :param xlabel: Label for the spatial x-axis, by default "Distance along cable (m)".
+    :type xlabel: str
+    :returns: Figure and Axes objects.
+    :rtype: Tuple[plt.Figure, plt.Axes]
+    """
+    fig, ax = plt.subplots(figsize=figsize, layout="constrained")
+    masked = np.ma.masked_invalid(field.T)
+    cmap_obj = plt.get_cmap(cmap).copy()
+    cmap_obj.set_bad("0.85")
+
+    mesh = ax.pcolormesh(positions, freqs, masked, cmap=cmap_obj, vmin=vmin, vmax=vmax, shading="gouraud")
+
+    if invert_freq:
+        ax.set_ylim(freqs.max(), freqs.min())
+
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel("Frequency (Hz)")
+    ax.set_title(title)
+
+    cbar = fig.colorbar(mesh, ax=ax, pad=0.02)
+    cbar.set_label(cbar_label)
+
+    _save(fig, save_path)
+    return fig, ax
 
 
 def plot_phase_velocity_section(
@@ -675,34 +724,75 @@ def plot_phase_velocity_section(
     vmax: Optional[float] = None,
     cmap: str = "turbo",
     invert_freq: bool = True,
-    title: str = "I-FDG phase velocity  $\\hat{V}(x, f)$",
+    title: str = r"I-FDG phase velocity $\hat{V}(x, f)$",
     figsize: Tuple[float, float] = (12, 5),
     save_path: Optional[PathLike] = None,
-) -> None:
+) -> Tuple[plt.Figure, plt.Axes]:
     """
-    Plot the I-FDG phase-velocity frequency-distance panel (Davis et al. 2026,
-    Fig. 7b): horizontal axis = position along the fiber, vertical axis =
-    frequency, colour = local surface-wave phase velocity. Lower frequencies
-    sense deeper structure, so the axis is inverted by default (low f at the
-    bottom) to read like a pseudo-depth section.
+    Plot the I-FDG phase-velocity frequency-distance panel (Davis et al. 2026, Fig. 7b).
 
-    :param positions: (nx,) along-fiber positions (m).
-    :param freqs: (nf,) frequency axis (Hz).
-    :param vel: (nx, nf) phase velocity (m/s); NaN where unconstrained.
-    :param vmin/vmax: Colour limits (m/s). Default: 2nd/98th percentiles.
-    :param invert_freq: Put low frequency at the bottom. Default True.
+    :param positions: 1D array of along-fiber positions in meters.
+    :type positions: np.ndarray
+    :param freqs: 1D array of frequencies in Hz.
+    :type freqs: np.ndarray
+    :param vel: 2D array (positions, freqs) of phase velocities (m/s).
+    :type vel: np.ndarray
+    :param vmin: Minimum velocity for color scale. Auto-computes 2nd percentile if None.
+    :type vmin: Optional[float]
+    :param vmax: Maximum velocity for color scale. Auto-computes 98th percentile if None.
+    :type vmax: Optional[float]
+    :param cmap: Colormap name, by default "turbo".
+    :type cmap: str
+    :param invert_freq: Places low frequencies at the bottom axis, by default True.
+    :type invert_freq: bool
+    :param title: Plot title.
+    :type title: str
+    :param figsize: Figure size in inches, by default (12, 5).
+    :type figsize: Tuple[float, float]
+    :param save_path: Destination path to export figure.
+    :type save_path: Optional[PathLike]
+    :returns: Figure and Axes objects.
+    :rtype: Tuple[plt.Figure, plt.Axes]
     """
     if vel.shape != (positions.size, freqs.size):
         raise ValueError(f"vel shape {vel.shape} != (nx={positions.size}, nf={freqs.size})")
-    if vmin is None:
-        vmin = float(np.nanpercentile(vel, 2))
-    if vmax is None:
-        vmax = float(np.nanpercentile(vel, 98))
-    _freq_distance_panel(
-        positions, freqs, vel, cmap=cmap, vmin=vmin, vmax=vmax,
-        cbar_label="$V_{\\mathrm{phase}}$ (m/s)", title=title,
+
+    vmin_val = float(np.nanpercentile(vel, 2)) if vmin is None else vmin
+    vmax_val = float(np.nanpercentile(vel, 98)) if vmax is None else vmax
+
+    return _freq_distance_panel(
+        positions, freqs, vel, cmap=cmap, vmin=vmin_val, vmax=vmax_val,
+        cbar_label=r"$V_{\mathrm{phase}}$ (m/s)", title=title,
         invert_freq=invert_freq, figsize=figsize, save_path=save_path,
     )
+
+
+def _lateral_median(field: np.ndarray, size: int) -> np.ndarray:
+    """
+    NaN-aware running median across positions (axis 0). DISPLAY smoothing only:
+    it imposes lateral smoothness and does not add real spatial resolution
+    (which stays capped by source spacing / aperture).
+
+    :param field: 2D array of data to smooth.
+    :type field: np.ndarray
+    :param size: Window size for the median filter.
+    :type size: int
+    :returns: The laterally smoothed data.
+    :rtype: np.ndarray
+    """
+    if size <= 1:
+        return field
+    if size % 2 == 0:
+        size += 1
+    h = size // 2
+    padded = np.pad(field, ((h, h), (0, 0)), mode="edge")
+    out = np.empty_like(field)
+    import warnings as _w
+    with _w.catch_warnings():
+        _w.simplefilter("ignore", RuntimeWarning)
+        for i in range(field.shape[0]):
+            out[i] = np.nanmedian(padded[i:i + size], axis=0)
+    return out
 
 
 def plot_sloth_section(
@@ -710,32 +800,96 @@ def plot_sloth_section(
     freqs: np.ndarray,
     s2: np.ndarray,
     *,
+    show_velo: bool = False,
+    unit: Literal["m", "km"] = "m",
+    vmin: Optional[float] = None,
+    vmax: Optional[float] = None,
     cmap: str = "turbo",
+    lateral_median: int = 0,
     invert_freq: bool = True,
-    title: str = "I-FDG sloth  $\\hat{s}^2(x, f)$",
+    title: Optional[str] = None,
     figsize: Tuple[float, float] = (12, 5),
     save_path: Optional[PathLike] = None,
-) -> None:
+) -> Tuple[plt.Figure, plt.Axes]:
     """
-    Plot the (real part of the) stacked sloth estimate as a frequency-distance
-    panel. ``s2`` may be complex (the imaginary part is a transport-residual
-    quality diagnostic); only ``Re s2`` is mapped.
+    Plot the stacked I-FDG sloth -- or, with ``show_velo=True``, the phase
+    velocity derived from it -- as a (distance x frequency) panel.
 
-    :param s2: (nx, nf) complex or real sloth (s^2/m^2).
+    Non-physical samples (Re s^2 <= 0) are masked to NaN and drawn in grey, so
+    the same blank pixels appear in both the sloth and velocity views.
+
+    :param positions: 1D along-fiber positions in METERS (converted internally per ``unit``).
+    :type positions: np.ndarray
+    :param freqs: 1D frequencies in Hz.
+    :type freqs: np.ndarray
+    :param s2: 2D complex or real sloth (s^2/m^2), shape (positions, freqs).
+    :type s2: np.ndarray
+    :param show_velo: If True, convert sloth to phase velocity ``V = 1/sqrt(Re s^2)`` and plot that instead of sloth. Default False.
+    :type show_velo: bool
+    :param unit: Spatial unit for the distance axis AND the plotted quantity. Default "m".
+    :type unit: Literal["m", "km"]
+    :param vmin: Minimum color limit in the chosen unit.
+    :type vmin: Optional[float]
+    :param vmax: Maximum color limit in the chosen unit.
+    :type vmax: Optional[float]
+    :param cmap: Colormap, by default "turbo".
+    :type cmap: str
+    :param lateral_median: If > 1, apply a NaN-aware running median of this width across channels before plotting. Default 0 (off).
+    :type lateral_median: int
+    :param invert_freq: Place low frequency at the bottom (pseudo-depth), by default True.
+    :type invert_freq: bool
+    :param title: Plot title; auto-set for sloth vs velocity if None.
+    :type title: Optional[str]
+    :param figsize: Figure size.
+    :type figsize: Tuple[float, float]
+    :param save_path: Export path.
+    :type save_path: Optional[PathLike]
+    :returns: Figure and Axes objects.
+    :rtype: Tuple[plt.Figure, plt.Axes]
     """
-    s2r = np.real(np.asarray(s2))
+    unit = unit.lower().strip()  # type: ignore[assignment]
+    if unit not in ("m", "km"):
+        raise ValueError("unit must be 'm' or 'km'")
+    dist_scale = 1000.0 if unit == "km" else 1.0
+
+    # Mask non-physical sloth (Re s^2 <= 0) before any conversion.
+    s2r = np.real(np.asarray(s2, dtype=float))
     with np.errstate(invalid="ignore"):
-        s2r = np.where(s2r > 0, s2r, np.nan)
-    vmax = float(np.nanpercentile(s2r, 98))
-    _freq_distance_panel(
-        positions, freqs, s2r, cmap=cmap, vmin=0.0, vmax=vmax,
-        cbar_label="Re $\\hat{s}^2$ (s$^2$/m$^2$)", title=title,
+        s2r = np.where(s2r > 0.0, s2r, np.nan)
+
+    pos_plot = np.asarray(positions, dtype=float) / dist_scale
+    xlabel = f"Distance along cable ({unit})"
+
+    if show_velo:
+        # phase velocity = 1/sqrt(sloth); m/s -> divide by dist_scale for km/s
+        with np.errstate(invalid="ignore", divide="ignore"):
+            field = (1.0 / np.sqrt(s2r)) / dist_scale
+        cbar_label = rf"$V_{{\mathrm{{phase}}}}$ ({unit}/s)"
+        default_title = r"I-FDG phase velocity $\hat{V}(x, f)$"
+        lo_pct = 2.0
+    else:
+        # sloth s^2/m^2 -> s^2/km^2 multiplies by dist_scale^2 (= 1/V^2 units)
+        field = s2r * (dist_scale ** 2)
+        cbar_label = rf"Re $\hat{{s}}^2$ (s$^2$/{unit}$^2$)"
+        default_title = r"I-FDG sloth $\hat{s}^2(x, f)$"
+        lo_pct = 0.0
+
+    if lateral_median and lateral_median > 1:
+        field = _lateral_median(field, int(lateral_median))
+
+    vmin_val = (0.0 if lo_pct == 0.0 else float(np.nanpercentile(field, lo_pct))) if vmin is None else vmin
+    vmax_val = float(np.nanpercentile(field, 98)) if vmax is None else vmax
+
+    return _freq_distance_panel(
+        pos_plot, freqs, field, cmap=cmap, vmin=vmin_val, vmax=vmax_val,
+        cbar_label=cbar_label, title=title or default_title,
         invert_freq=invert_freq, figsize=figsize, save_path=save_path,
+        xlabel=xlabel,
     )
 
 
 # ==============================================================
-# 3. Dispersion cross-check against das_ani picks
+# 3. Dispersion cross-check
 # ==============================================================
 def plot_dispersion_compare(
     freqs: np.ndarray,
@@ -748,35 +902,49 @@ def plot_dispersion_compare(
     title: Optional[str] = None,
     figsize: Tuple[float, float] = (6, 5),
     save_path: Optional[PathLike] = None,
-) -> None:
+) -> Tuple[plt.Figure, plt.Axes]:
     """
-    Overlay a local I-FDG dispersion curve against an independent das_ani
-    phase-shift (MASW) pick at the same position -- the key validation that
-    gradiometry recovers the same surface-wave phase velocity as the
-    aperture-averaged dispersion panel (Davis et al. 2026, Fig. 7c).
+    Overlay a local I-FDG dispersion curve against an independent phase-shift pick.
 
-    :param freqs: (nf,) frequency axis (Hz) of the gradiometry estimate.
-    :param c_grad: (nf,) local I-FDG phase velocity at the chosen position (m/s).
-    :param position_m: Position label for the title (m).
-    :param ref_freq: Optional (m,) frequency axis of the das_ani pick (Hz).
-    :param ref_vel: Optional (m,) das_ani picked phase velocity (m/s).
-    :param c_band: Optional (lo, hi) arrays for a shaded lateral spread of the
-                   gradiometry estimate around ``c_grad``.
+    :param freqs: 1D frequency axis (Hz) of the gradiometry estimate.
+    :type freqs: np.ndarray
+    :param c_grad: 1D local I-FDG phase velocity (m/s).
+    :type c_grad: np.ndarray
+    :param position_m: Position label for plot header.
+    :type position_m: Optional[float]
+    :param ref_freq: Reference frequency axis from independent picks.
+    :type ref_freq: Optional[np.ndarray]
+    :param ref_vel: Reference picked phase velocities (m/s).
+    :type ref_vel: Optional[np.ndarray]
+    :param c_band: Lower and upper velocity bound arrays for lateral spread shading.
+    :type c_band: Optional[Tuple[np.ndarray, np.ndarray]]
+    :param title: Custom plot title.
+    :type title: Optional[str]
+    :param figsize: Figure dimensions, by default (6, 5).
+    :type figsize: Tuple[float, float]
+    :param save_path: Destination path to save image file.
+    :type save_path: Optional[PathLike]
+    :returns: Figure and Axes objects.
+    :rtype: Tuple[plt.Figure, plt.Axes]
     """
-    with plt.rc_context(_RC):
-        fig, ax = plt.subplots(figsize=figsize)
-        if c_band is not None:
-            ax.fill_between(freqs, c_band[0], c_band[1], color="C0", alpha=0.2,
-                            label="I-FDG lateral spread")
-        ax.plot(freqs, c_grad, "o-", color="C0", lw=2, ms=4, label="I-FDG (gradiometry)")
-        if ref_freq is not None and ref_vel is not None:
-            ax.plot(ref_freq, ref_vel, "s--", color="C3", lw=1.8, ms=4,
-                    label="das_ani dispersion pick")
-        ax.set_xlabel("Frequency (Hz)")
-        ax.set_ylabel("Phase velocity (m/s)")
-        loc = f" at x = {position_m:.0f} m" if position_m is not None else ""
-        ax.set_title(title or f"Dispersion cross-check{loc}")
-        ax.grid(True, ls="--", alpha=0.5)
-        ax.legend(fontsize=10)
-        _save(fig, save_path)
-        plt.show()
+    fig, ax = plt.subplots(figsize=figsize, layout="constrained")
+
+    if c_band is not None:
+        ax.fill_between(freqs, c_band[0], c_band[1], color="C0", alpha=0.2, label="I-FDG lateral spread")
+
+    ax.plot(freqs, c_grad, "o-", color="C0", lw=2, ms=4, label="I-FDG (gradiometry)")
+
+    if ref_freq is not None and ref_vel is not None:
+        ax.plot(ref_freq, ref_vel, "s--", color="C3", lw=1.8, ms=4, label="das_ani dispersion pick")
+
+    ax.set_xlabel("Frequency (Hz)")
+    ax.set_ylabel("Phase velocity (m/s)")
+
+    loc_str = f" at x = {position_m:.0f} m" if position_m is not None else ""
+    ax.set_title(title or f"Dispersion cross-check{loc_str}")
+
+    ax.grid(True, ls="--", alpha=0.5)
+    ax.legend(loc="best")
+
+    _save(fig, save_path)
+    return fig, ax

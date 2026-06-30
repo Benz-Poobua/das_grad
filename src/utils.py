@@ -5,23 +5,16 @@
 :org: Stanford University
 :license: MIT
 :purpose: Shared utilities for the DAS gradiometry (das_grad) pipeline.
-
-Provenance: load_config / get_cfg / nextpow2 / timeit are copied (lightly
-trimmed -- no torch/CUDA hooks) from the companion das_ani repository
-(https://github.com/Benz-Poobua/das_ani, src/utils.py) so that das_grad has
-no import-time dependency on das_ani. The VSG *file format* is the only
-coupling between the two projects; see src/vsg.py.
 """
 from __future__ import annotations
 
 import functools
-import json
 import logging
 import os
 import re
 import time
 from pathlib import Path
-from typing import Any, Callable, Mapping, Sequence, TypeVar, Union, Tuple, Optional, Literal, List
+from typing import Any, Callable, TypeVar, Union, Tuple, Optional, Literal
 
 from scipy.ndimage import uniform_filter, gaussian_filter
 from scipy.fft import fft2, fftshift, ifft2, ifftshift
@@ -34,51 +27,9 @@ logger = logging.getLogger(__name__)
 PathLike = Union[str, os.PathLike, Path]
 F = TypeVar("F", bound=Callable[..., Any])
 
-
 # ==============================================================
-# 1. Config helpers (copied from das_ani)
+# 1. Config helpers  
 # ==============================================================
-def load_config(path: PathLike) -> dict[str, Any]:
-    p = Path(path).expanduser().resolve()
-    if not p.exists():
-        raise FileNotFoundError(p)
-
-    suf = p.suffix.lower()
-    if suf in {".yaml", ".yml"}:
-        try:
-            import yaml
-        except ImportError as e:
-            raise ImportError(
-                "YAML config requested but PyYAML is not installed. "
-                "Run: pip install pyyaml"
-            ) from e
-        with p.open("r") as f:
-            cfg = yaml.safe_load(f)
-            if not isinstance(cfg, dict):
-                raise ValueError("Config root must be a mapping/dict.")
-            return cfg
-
-    if suf == ".json":
-        with p.open("r") as f:
-            cfg = json.load(f)
-            if not isinstance(cfg, dict):
-                raise ValueError("Config root must be a mapping/dict.")
-            return cfg
-
-    raise ValueError(f"Unsupported config extension: {suf} (use .yaml/.yml/.json)")
-
-
-def get_cfg(cfg: Mapping[str, Any], keys: Sequence[str], default: Any = None,
-            *, required: bool = False) -> Any:
-    cur: Any = cfg
-    for k in keys:
-        if not isinstance(cur, Mapping) or k not in cur:
-            if required:
-                raise KeyError(f"Missing config key: {'.'.join(keys)}")
-            return default
-        cur = cur[k]
-    return cur
-
 def parse_ncf_stack_filename(fname: str) -> Tuple[str, str, str, str]:
     base = os.path.basename(fname)
 

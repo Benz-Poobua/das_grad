@@ -21,19 +21,19 @@ Whereas the das_ani dispersion route (f–v panels → picks → inversion) yiel
 
 A single surface-wave mode obeys the 2-D scalar wave equation with sloth (squared slowness) $s^2 = 1/c^2$ (de Ridder & Curtis 2017):
 
-$$\big[\nabla^2 - s^2(\mathbf{x})\,\partial_t^2\big]\,\tilde u(\mathbf{x},t) = 0. \tag{1}$$
+$$\big[\nabla^2 - s^2(\mathbf{x})\,\partial_t^2\big]\,\tilde u(\mathbf{x},t) = 0.$$
 
 **TDG** (time domain, least squares over lag; Davis et al. eq. 3):
 
-$$\widehat{s^2}(\mathbf{x}) = \frac{\sum_t \partial_t^2\tilde u \, \nabla^2 \tilde u}{\sum_t \big|\partial_t^2\tilde u\big|^2}. \tag{2}$$
+$$\widehat{s^2}(\mathbf{x}) = \frac{\sum_t \partial_t^2\tilde u \, \nabla^2 \tilde u}{\sum_t \big|\partial_t^2\tilde u\big|^2}.$$
 
 **FDG** (per frequency; Davis et al. eq. 5):
 
-$$\widehat{s^2}(\mathbf{x},\omega) = \frac{\widetilde U^*\,\nabla^2 \widetilde U}{(i\omega)^2\,\big|\widetilde U\big|^2}. \tag{3}$$
+$$\widehat{s^2}(\mathbf{x},\omega) = \frac{\widetilde U^*\,\nabla^2 \widetilde U}{(i\omega)^2\,\big|\widetilde U\big|^2}.$$
 
 **I-FDG** applies (3) to a VSG $\widetilde V(\mathbf{x},\mathbf{x}_s,\omega_\tau)$ — legitimate because a VSG is, mode by mode, a 2-D Helmholtz field in the receiver coordinate (Green's-function retrieval) — and stacks over virtual sources (Davis et al. eqs. 9–10):
 
-$$\widehat{s^2}(\mathbf{x},\omega_\tau) = \frac{1}{N_s}\sum_{\mathbf{x}_s} \frac{\widetilde V^*\,\nabla^2 \widetilde V}{(i\omega_\tau)^2\big|\widetilde V\big|^2}, \qquad \widehat{V}(\mathbf{x},\omega_\tau) = \big[\widehat{s^2}\big]^{-1/2}. \tag{4,5}$$
+$$\widehat{s^2}(\mathbf{x},\omega_\tau) = \frac{1}{N_s}\sum_{\mathbf{x}_s} \frac{\widetilde V^*\,\nabla^2 \widetilde V}{(i\omega_\tau)^2\big|\widetilde V\big|^2}, \qquad \widehat{V}(\mathbf{x},\omega_\tau) = \big[\widehat{s^2}\big]^{-1/2}.$$
 
 ### The DAS twist: the fiber Laplacian
 
@@ -42,25 +42,6 @@ Davis et al. evaluate $\nabla^2$ with a 2-D pseudospectral operator on a regular
 $$\nabla^2 U = \frac{\partial^2 U}{\partial r^2} + \frac{1}{r}\frac{\partial U}{\partial r}.$$
 
 `das_grad` implements both: `laplacian.mode: fiber_1d` (with the $(1/r)\,\partial_r$ curvature term, recommended ON) and the Davis-faithful `grid_2d` for gridded layouts. Both are pseudospectral — no finite-difference stencil bias.
-
----
-
-## Verified accuracy (synthetic benchmark)
-
-`src/eval.py` builds analytic single-mode VSGs ($\widetilde V = A(\omega)\,H_0(k(\omega) r)$, numpy-FFT sign convention) with a **known** dispersion curve $c(f)$, writes them in the das_ani file convention, runs the full production pipeline, and measures recovery. Representative result (9 VSGs, 400 ch × 8 m, 1–8 Hz, no noise):
-
-| f (Hz) | 1.0 | 1.9 | 2.8 | 3.7 | 4.5 | 5.4 | 6.3 | 7.2 |
-|--------|-----|-----|-----|-----|-----|-----|-----|-----|
-| c true (m/s) | 1040 | 955 | 900 | 864 | 842 | 827 | 817 | 811 |
-| c recovered  | 1046 | 956 | 900 | 865 | 842 | 827 | 817 | 811 |
-| rel. err (%) | 0.59 | 0.18 | 0.03 | 0.02 | 0.02 | 0.01 | 0.01 | 0.02 |
-
-Pixel-level: median 0.10 %, p95 4 % (curvature ON). Two implementation details matter — both are asserted by the test suite:
-
-1. **Near-source exclusion** (`stack.r_exclude_m`): each VSG is near-field within ~a wavelength of its own source; excluding those channels per VSG in the eq.-10 stack (they stay covered by the other sources) improves the stack by an **order of magnitude**.
-2. **Spectral time derivative** in TDG: the textbook 2nd-order finite difference biases the sloth by $(\omega\,\Delta t)^2/12$ (≈ 8 % at 8 Hz @ 50 Hz); the FFT derivative removes it.
-
-The lowest usable frequency is **aperture-limited** ($\lambda \lesssim$ aperture/3, i.e. $f_{\min}\gtrsim 3c/L$), the highest by single-mode separation — read both off a das_ani dispersion panel before running.
 
 ---
 
@@ -84,30 +65,19 @@ The package is deliberately light: the entire pipeline is FFTs and elementwise m
 .
 ├── README.md
 ├── pyproject.toml
-├── Makefile
 ├── sherlock_setup.sh            # HPC module environment (CPU)
 │
-├── configs/
-│   └── urban_grad.yaml          # I-FDG parameters for the urban deployment
-│
-├── slurm/
-│   ├── run_grad_urban.slurm     # production I-FDG on das_ani VSGs
-│   └── run_eval_synth.slurm     # synthetic-recovery benchmark
-│
 ├── data/
-│   ├── grad/                    # products: grad_vsch_<tag>.npz
-│   └── benchmarks/              # synthetic benchmark outputs
+│   ├── ncf_pre/                 # preprocessed stacked VSGs (folded)
+│   └── ncf_torus/               # torus-maked stacked VSGs
 │
 ├── src/
-│   ├── utils.py                 # config/timing helpers (copied from das_ani)
-│   ├── vsg.py                   # das_ani VSG file contract + geometry
+│   ├── utils.py                 # config/timing + math helpers (copied from das_ani)
+│   ├── ncf.py                   # das_ani VSG script legacy
 │   ├── mask.py                  # torus (moveout-annulus) masking
 │   ├── laplacian.py             # pseudospectral fiber_1d / grid_2d operators
 │   ├── gradiometry.py           # TDG / FDG / I-FDG solvers + VSG stacking
-│   ├── post.py                  # quality mask, median filter, product export
-│   ├── synth.py                 # analytic Helmholtz VSGs (known c(f))
-│   ├── grad.py                  # config-driven workflow driver (CLI)
-│   └── eval.py                  # synthetic-recovery benchmark (CLI)
+│   └── post.py                  # quality mask, median filter, product export
 │
 └── tests/                       # pytest suite
 ```
@@ -116,7 +86,7 @@ The package is deliberately light: the entire pipeline is FFTs and elementwise m
 
 ## Input: das_ani VSGs
 
-`das_grad` reads das_ani outputs directly — no converter step:
+`das_grad` reads das_ani outputs
 
 ```text
 <basename>_cc_<vs:03d>_<mode>.npy            raw VSGs (per file, per source)
@@ -124,46 +94,6 @@ YYYYMMDD[_HHMMSS]_cc_<vs:03d>_<window>_<mode>.npy   stacks (recommended input)
 ```
 
 float32, shape `(nch, 2M+1)`; row *i* ↔ channel `first_chan + i`; lag axis `arange(-M, M+1)/fs_proc`; `<vs>` is the virtual-source row. The geometry not stored in the `.npy` (`fs_proc`, `dx`, `first_chan`) is supplied by the `data:` block of the das_grad config and **must match the das_ani run** that produced the files.
-
----
-
-## Workflow
-
-```bash
-make grad      # python -m src.grad --config configs/urban_grad.yaml --verbose
-make eval      # python -m src.eval --outdir data/benchmarks/synth
-make test      # pytest
-```
-
-### Config reference (`configs/urban_grad.yaml`)
-
-| Block | Keys | Purpose |
-|-------|------|---------|
-| `paths` | `vsg_root`, `vsg_pattern`, `output_root` | where VSGs live / products go |
-| `data` | `fs_proc`, `dx`, `first_chan` | geometry of the das_ani run |
-| `mask` | `v_inner`, `v_outer`, `t_inner`, `t_outer`, `taper_sec`, `causal_only` | torus filter: keep `tau ∈ [r/v_outer + t_outer, r/v_inner + t_inner]` per channel (Davis et al. Sec. 3.2) |
-| `band` | `f_min`, `f_max` | usable single-mode band (from a dispersion panel) |
-| `laplacian` | `mode`, `include_curvature`, `channel_taper_alpha` | `fiber_1d` (+ cylindrical curvature, recommended) or `grid_2d` |
-| `stack` | `r_exclude_m` | per-VSG near-source exclusion radius (~1–2 λ at band center) |
-| `post` | `median_size`, `edge_frac`, `r_min_m`, `v_min`, `v_max` | quality masking + NaN-aware median filter |
-| `output` | `tag` | product name `grad_vsch_<tag>.npz` |
-
-### Output product
-
-`grad_vsch_<tag>.npz` with keys: `s2` (complex64 `(nch, nfreq)` stacked sloth — imaginary part ≈ transport residual, a quality diagnostic), `vel` (float32 `(nch, nfreq)` phase velocity, NaN where invalid), `freqs` (Hz), `positions` (absolute along-fiber meters), `valid` (channel mask), `meta_json` (config echo + contributing VSG list).
-
-The `(x, f)` velocity cube is the direct input for per-channel 1-D surface-wave inversion (e.g. via disba/evodcinv, already dependencies of das_ani) toward a pseudo-3-D $V_S(x, z)$ — the long-wavelength E-FWI starting model that motivates the whole chain (Davis et al. 2026, Sec. 6.4).
-
----
-
-## Running on HPC (SLURM)
-
-```bash
-sbatch slurm/run_grad_urban.slurm     # production I-FDG (CPU)
-sbatch slurm/run_eval_synth.slurm     # synthetic benchmark
-```
-
-Both scripts `cd` to the repo root and `source sherlock_setup.sh` (python + scipy/pandas modules; no GPU required). Adjust the `cd` path and partition to your cluster.
 
 ---
 
@@ -194,8 +124,8 @@ and for the VSG construction engine:
 > Zhang, W.-Q. (2026). *Accelerating cross-correlation for long sequences
 > with short lag constraints.* **Digital Signal Processing**, 168, 105509.
 
-> Poobua, S., Li, H., & Biondi, B. L. *Minimum-Effort DAS Cross-Correlation.*
-> Stanford Exploration Project report **SEP-199**.
+> Poobua, S., Li, H., & Biondi, B. L. *Minimum-Effort DAS
+> Cross-Correlation:* SEP Report 199, Stanford University.
 
 ---
 ## License

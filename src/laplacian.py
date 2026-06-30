@@ -67,6 +67,37 @@ def spectral_derivative(arr: np.ndarray, d: float, *, order: int = 1,
     return np.fft.ifft(np.fft.fft(arr, axis=axis) * mult, axis=axis)
 
 
+def _lowpass_channels(
+    arr: np.ndarray, d: float, k_cutoff: float, *, axis: int = 0, taper_frac: float = 0.5
+) -> np.ndarray:
+    """
+    Cosine-tapered wavenumber low-pass along ``axis`` (channels): keep spatial
+    wavenumbers ``|k| <= k_cutoff`` (cycles per unit of ``d``), ramping to zero
+    over ``[k_cutoff*(1-taper_frac), k_cutoff]``.
+
+    This removes the high-wavenumber tail (higher modes / scattering / noise /
+    1-bit roughness) that the k^2-weighted gradiometry ratio over-weights,
+    biasing the recovered phase velocity slow. Returns complex.
+
+    :param arr: Input field; FFT taken along ``axis``.
+    :param d: Sample spacing along ``axis`` (m) -> k in cycles/m.
+    :param k_cutoff: Pass-band edge (cycles/m). Surface-wave fundamental sits at
+                     ``k = f / c`` (e.g. 5 Hz / 350 m/s = 0.014 cycles/m).
+    :param taper_frac: Fraction of the pass-band over which to cosine-ramp.
+    """
+    n = arr.shape[axis]
+    kc = np.abs(np.fft.fftfreq(n, d=float(d)))           # cycles/m
+    lo = float(k_cutoff) * (1.0 - float(taper_frac))
+    w = np.ones(n, dtype=np.float64)
+    w[kc >= k_cutoff] = 0.0
+    band = (kc > lo) & (kc < k_cutoff)
+    if k_cutoff > lo:
+        w[band] = 0.5 * (1.0 + np.cos(np.pi * (kc[band] - lo) / (k_cutoff - lo)))
+    shape = [1] * arr.ndim
+    shape[axis] = n
+    return np.fft.ifft(np.fft.fft(arr, axis=axis) * w.reshape(shape), axis=axis)
+
+
 def laplacian_fiber(
     arr: np.ndarray,
     dx: float,
@@ -74,6 +105,7 @@ def laplacian_fiber(
     offset: np.ndarray | None = None,
     include_curvature: bool = True,
     r_min: float | None = None,
+    k_cutoff: float | None = None,
 ) -> np.ndarray:
     """
     Along-fiber Laplacian of a (nch, ...) frequency-domain VSG slab.
@@ -94,9 +126,14 @@ def laplacian_fiber(
                   Default: one channel spacing. The near-source region is
                   unreliable regardless (near-field, |H0| singularity) and
                   should be excluded via post.quality_mask.
+    :param k_cutoff: If set, low-pass the field across channels at this spatial
+                     wavenumber (cycles/m) before differentiating, suppressing
+                     the high-k tail that biases the sloth slow. None = off.
     :return: complex array, same shape as ``arr``.
     """
     arr = np.asarray(arr)
+    if k_cutoff is not None:
+        arr = _lowpass_channels(arr, dx, float(k_cutoff), axis=0)
     d2 = spectral_derivative(arr, dx, order=2, axis=0)
     if not include_curvature:
         return d2

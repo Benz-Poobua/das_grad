@@ -30,7 +30,7 @@ import logging
 import os
 import numpy as np
 
-from typing import List, Union
+from typing import List
 from tqdm import tqdm
 
 from src.utils import fk_filter
