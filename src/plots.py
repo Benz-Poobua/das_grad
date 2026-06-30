@@ -853,7 +853,7 @@ def plot_sloth_section(
     dist_scale = 1000.0 if unit == "km" else 1.0
 
     # Mask non-physical sloth (Re s^2 <= 0) before any conversion.
-    s2r = np.real(np.asarray(s2, dtype=float))
+    s2r = np.asarray(np.real(s2), dtype=float)
     with np.errstate(invalid="ignore"):
         s2r = np.where(s2r > 0.0, s2r, np.nan)
 
